@@ -1,0 +1,65 @@
+[
+  {
+    "id": "TC1",
+    "ac": "AC1",
+    "text": "Given a mocked Partner Center response with 1 subscription, When csp_list_customer_subscriptions is called, Then items has 1 entry with id/offer_name/quantity/status/billing_cycle/unit_type/commitment_end_date matching the mocked response",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_subscriptions_maps_all_fields"]
+  },
+  {
+    "id": "TC2",
+    "ac": "AC2",
+    "text": "Given a request to /mcp with no X-PartnerCenter-Token header, When any tool is called, Then the server returns 401 listing X-PartnerCenter-Token as a required header, and no upstream call is made",
+    "type": "auto",
+    "tests": ["tests/test_middleware.py::test_missing_token_header_returns_401"]
+  },
+  {
+    "id": "TC3",
+    "ac": "AC3",
+    "text": "Given customer_tenant_id is omitted or blank, When csp_list_customer_subscriptions is called, Then invalid_argument is returned and the mocked client recorded zero calls",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_blank_customer_tenant_id_is_rejected_before_any_call"]
+  },
+  {
+    "id": "TC4",
+    "ac": "AC4",
+    "text": "Given the mocked upstream returns 404, When called, Then not_found is returned with the upstream message",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_upstream_404_maps_to_not_found"]
+  },
+  {
+    "id": "TC5",
+    "ac": "AC4",
+    "text": "Given the mocked upstream returns 403, When called, Then unauthorized is returned with the upstream message",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_upstream_403_maps_to_unauthorized"]
+  },
+  {
+    "id": "TC6",
+    "ac": "AC5",
+    "text": "Given the mocked upstream returns {totalCount:0, items:[]}, When called, Then items is [], total_count is 0, has_more is false (success, not an error)",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_zero_subscriptions_is_a_success_with_empty_items"]
+  },
+  {
+    "id": "TC7",
+    "ac": "AC6",
+    "text": "Given the mocked upstream returns 75 items and totalCount 75 with no limit passed, When called, Then exactly 50 items are returned and has_more is true",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_default_limit_truncates_to_50_and_sets_has_more"]
+  },
+  {
+    "id": "TC8",
+    "ac": "AC7",
+    "text": "Given two concurrent calls with different tokens and customer_tenant_id values, When both run concurrently, Then each mocked upstream request carries only its own call's token and tenant id",
+    "type": "auto",
+    "tests": ["tests/test_middleware.py::test_concurrent_requests_do_not_leak_token_or_tenant"]
+  },
+  {
+    "id": "TC9",
+    "ac": "AC8",
+    "text": "Given the mocked upstream returns 503 on every attempt, When called, Then upstream_error is returned with retryable true, after the configured retries are exhausted",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_persistent_503_maps_to_retryable_upstream_error"]
+  }
+]
