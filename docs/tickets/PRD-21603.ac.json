@@ -32,7 +32,7 @@
     "ac": "AC5",
     "text": "Given the mocked upstream returns 403, When called, Then unauthorized is returned with the upstream message",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_upstream_403_maps_to_unauthorized"]
+    "tests": ["tests/test_tools.py::test_customers_upstream_403_maps_to_unauthorized"]
   },
   {
     "id": "TC6",
@@ -46,7 +46,7 @@
     "ac": "AC7",
     "text": "Given the mocked upstream returns 75 items and totalCount 75 with no limit/offset passed, When called, Then exactly 50 items are returned and has_more is true",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_default_limit_truncates_to_50_and_sets_has_more"]
+    "tests": ["tests/test_tools.py::test_customers_default_limit_truncates_to_50_and_sets_has_more"]
   },
   {
     "id": "TC8",
@@ -60,6 +60,6 @@
     "ac": "AC8",
     "text": "Given the mocked upstream returns 503 on every attempt, When called, Then upstream_error is returned with retryable true, after the configured retries are exhausted",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_persistent_503_maps_to_retryable_upstream_error"]
+    "tests": ["tests/test_tools.py::test_customers_persistent_503_maps_to_retryable_upstream_error"]
   }
 ]

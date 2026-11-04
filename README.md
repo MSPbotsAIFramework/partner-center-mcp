@@ -91,15 +91,17 @@ Links: [connect.mspbots.ai](https://connect.mspbots.ai) · [mspbots.ai](https://
 
 ## Scope
 
-First version: **1 read-only tool**, `csp_list_customer_subscriptions`. This
-repo is shared by three sibling tickets that each add one tool for this same
-connector (coordinated through this repo's `dev-lock`):
+Current version: **2 read-only tools**, `csp_list_customer_subscriptions`
+and `csp_list_customers`. This repo is shared by three sibling tickets that
+each add one tool for this same connector (coordinated through this repo's
+`dev-lock`):
 
-- `csp_list_customer_subscriptions` (this ticket, PRD-21573) — list a
-  customer tenant's subscriptions.
+- `csp_list_customer_subscriptions` (PRD-21573) — list a customer tenant's
+  subscriptions.
+- `csp_list_customers` (this ticket, PRD-21603) — list every customer
+  tenant under the partner.
 - `csp_update_customer_subscription_quantity` (PRD-21574) — not yet
   implemented, see Known Gaps.
-- `csp_list_customers` (PRD-21603) — not yet implemented, see Known Gaps.
 
 ## Authentication
 
@@ -146,6 +148,7 @@ Missing the header returns `401`:
 | Tool | Description | Params |
 |---|---|---|
 | `csp_list_customer_subscriptions` | List every Partner Center subscription a CSP customer tenant has (id, offer name, quantity, status, billing cycle, unit type, commitment end date). | customer_tenant_id, limit? |
+| `csp_list_customers` | List every customer tenant under the caller's CSP partner relationship (id, company name, domain, relationship to partner). | filter?, limit?, offset? |
 
 ## Typical Workflows
 
@@ -153,6 +156,12 @@ Missing the header returns `401`:
   `csp_list_customer_subscriptions` with the customer's Entra tenant id to
   see what they are currently subscribed to, at what quantity and billing
   cycle.
+- **Enumerate the partner's customer base** (e.g. to drive a per-customer
+  automation, or to look up a customer's tenant id by name/domain before
+  calling `csp_list_customer_subscriptions`): call `csp_list_customers`,
+  optionally with a `$filter` expression (e.g.
+  `companyProfile/companyName eq 'Contoso'`) and paging through with
+  `limit`/`offset` while `has_more` is true.
 
 ## Test Example
 
@@ -195,9 +204,8 @@ failure — never a raw 500 or stack trace.
   All tests use mocked HTTP responses. True end-to-end verification against
   a live account is needed before this is relied on for a real customer
   (needs a real vendor account — does not block delivery per SOP).
-- **`csp_update_customer_subscription_quantity` (PRD-21574) and
-  `csp_list_customers` (PRD-21603)** are not yet implemented — this repo
-  currently exposes only `csp_list_customer_subscriptions`.
+- **`csp_update_customer_subscription_quantity` (PRD-21574)** is not yet
+  implemented.
 - **Partner Center's exact error-body shape** (`description` vs `message`
   vs `error`) is taken from the publicly documented reference, not verified
   against a live call. `api_client.py`'s `_raise_for_status` tries
@@ -207,4 +215,11 @@ failure — never a raw 500 or stack trace.
 - **Pagination**: Partner Center's subscriptions endpoint is not documented
   as paginated; `limit`/`has_more` is applied defensively against an
   unusually large customer, not because a confirmed `nextLink`/cursor
-  mechanism exists for this endpoint.
+  mechanism exists for this endpoint. `csp_list_customers`'s `/customers`
+  endpoint *is* documented with `$filter`/`size`/`offset` query parameters
+  (per the ticket's own description), but the exact semantics of `size` vs
+  `offset` are not verified against a live account — see `customers.py`'s
+  module-level note. This tool additionally truncates the mapped response
+  to the effective `limit` client-side regardless of what the upstream
+  `size` parameter actually returns, so `has_more`/truncation hold even if
+  Partner Center does not honor `size` as expected.
