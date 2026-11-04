@@ -4,62 +4,80 @@
     "ac": "AC1",
     "text": "Given a mocked Partner Center response with 1 subscription, When csp_list_customer_subscriptions is called, Then items has 1 entry with id/offer_name/quantity/status/billing_cycle/unit_type/commitment_end_date matching the mocked response",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_list_subscriptions_maps_all_fields"]
+    "tests": ["tests/test_tools.py::test_list_subscriptions_maps_all_fields"],
+    "result": "pass",
+    "evidence": "uv run pytest -v @ ba25a89: tests/test_tools.py::test_list_subscriptions_maps_all_fields PASSED. Asserts payload['items'] == [{id, offer_name, quantity, status, billing_cycle, unit_type, commitment_end_date}] mapped from a mocked {offerName, billingCycle, unitType, commitmentEndDate} response, total_count=1, has_more=False."
   },
   {
     "id": "TC2",
     "ac": "AC2",
     "text": "Given a request to /mcp with no X-PartnerCenter-Token header, When any tool is called, Then the server returns 401 listing X-PartnerCenter-Token as a required header, and no upstream call is made",
     "type": "auto",
-    "tests": ["tests/test_middleware.py::test_missing_token_header_returns_401"]
+    "tests": ["tests/test_middleware.py::test_missing_token_header_returns_401"],
+    "result": "pass",
+    "evidence": "uv run pytest -v @ ba25a89: tests/test_middleware.py::test_missing_token_header_returns_401 PASSED (via starlette TestClient against the real app). Also confirmed live: `curl -i -X POST http://localhost:8080/mcp` with no X-PartnerCenter-Token header -> HTTP/1.1 401, body {\"error\":\"Missing credentials\",...,\"required_headers\":[\"X-PartnerCenter-Token\"]}; request never reaches the tool handler so no upstream call is possible."
   },
   {
     "id": "TC3",
     "ac": "AC3",
     "text": "Given customer_tenant_id is omitted or blank, When csp_list_customer_subscriptions is called, Then invalid_argument is returned and the mocked client recorded zero calls",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_blank_customer_tenant_id_is_rejected_before_any_call"]
+    "tests": ["tests/test_tools.py::test_blank_customer_tenant_id_is_rejected_before_any_call"],
+    "result": "pass",
+    "evidence": "uv run pytest -v @ ba25a89: tests/test_tools.py::test_blank_customer_tenant_id_is_rejected_before_any_call PASSED. customer_tenant_id='   ' -> error.code=invalid_argument, fake client.calls == []. Also confirmed live: curl tools/call with customer_tenant_id=\"\" -> {\"error\":{\"code\":\"invalid_argument\",\"message\":\"customer_tenant_id is required and must not be blank\",\"retryable\":false}}."
   },
   {
     "id": "TC4",
     "ac": "AC4",
     "text": "Given the mocked upstream returns 404, When called, Then not_found is returned with the upstream message",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_upstream_404_maps_to_not_found"]
+    "tests": ["tests/test_tools.py::test_upstream_404_maps_to_not_found"],
+    "result": "pass",
+    "evidence": "uv run pytest -v @ ba25a89: tests/test_tools.py::test_upstream_404_maps_to_not_found PASSED. error.code=not_found, error.message=\"Customer tenant not found\" (the fixed message on the fake PartnerCenterError(404, ...))."
   },
   {
     "id": "TC5",
     "ac": "AC4",
     "text": "Given the mocked upstream returns 403, When called, Then unauthorized is returned with the upstream message",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_upstream_403_maps_to_unauthorized"]
+    "tests": ["tests/test_tools.py::test_upstream_403_maps_to_unauthorized"],
+    "result": "pass",
+    "evidence": "uv run pytest -v @ ba25a89: tests/test_tools.py::test_upstream_403_maps_to_unauthorized PASSED. error.code=unauthorized, error.message=\"No reseller relationship with this tenant\"."
   },
   {
     "id": "TC6",
     "ac": "AC5",
     "text": "Given the mocked upstream returns {totalCount:0, items:[]}, When called, Then items is [], total_count is 0, has_more is false (success, not an error)",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_zero_subscriptions_is_a_success_with_empty_items"]
+    "tests": ["tests/test_tools.py::test_zero_subscriptions_is_a_success_with_empty_items"],
+    "result": "pass",
+    "evidence": "uv run pytest -v @ ba25a89: tests/test_tools.py::test_zero_subscriptions_is_a_success_with_empty_items PASSED. Asserts 'error' not in payload and payload == {items: [], total_count: 0, has_more: False}."
   },
   {
     "id": "TC7",
     "ac": "AC6",
     "text": "Given the mocked upstream returns 75 items and totalCount 75 with no limit passed, When called, Then exactly 50 items are returned and has_more is true",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_default_limit_truncates_to_50_and_sets_has_more"]
+    "tests": ["tests/test_tools.py::test_default_limit_truncates_to_50_and_sets_has_more"],
+    "result": "pass",
+    "evidence": "uv run pytest -v @ ba25a89: tests/test_tools.py::test_default_limit_truncates_to_50_and_sets_has_more PASSED. No-limit case: len(items)==50, total_count==75, has_more==True. Boundary case in the same test: limit=200 with 75 items -> len(items)==75, has_more==False."
   },
   {
     "id": "TC8",
     "ac": "AC7",
     "text": "Given two concurrent calls with different tokens and customer_tenant_id values, When both run concurrently, Then each mocked upstream request carries only its own call's token and tenant id",
     "type": "auto",
-    "tests": ["tests/test_middleware.py::test_concurrent_requests_do_not_leak_token_or_tenant"]
+    "tests": ["tests/test_middleware.py::test_concurrent_requests_do_not_leak_token_or_tenant"],
+    "result": "pass",
+    "evidence": "uv run pytest -v @ ba25a89: tests/test_middleware.py::test_concurrent_requests_do_not_leak_token_or_tenant PASSED. Two tool calls (token-A/tenant-aaa, token-B/tenant-bbb) run via asyncio.gather with an artificial await inside the mocked HTTP handler to force interleaving; asserts the upstream request carrying 'Bearer token-A' had tenant-aaa in its URL path and 'Bearer token-B' had tenant-bbb -- no cross-pairing."
   },
   {
     "id": "TC9",
     "ac": "AC8",
     "text": "Given the mocked upstream returns 503 on every attempt, When called, Then upstream_error is returned with retryable true, after the configured retries are exhausted",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_persistent_503_maps_to_retryable_upstream_error"]
+    "tests": ["tests/test_tools.py::test_persistent_503_maps_to_retryable_upstream_error"],
+    "result": "pass",
+    "evidence": "uv run pytest -v @ ba25a89: tests/test_tools.py::test_persistent_503_maps_to_retryable_upstream_error PASSED (error.code=upstream_error, retryable=True). Retry exhaustion itself (4 attempts: 1 initial + 3 retries) verified separately by the bonus test tests/test_tools.py::test_api_client_retries_503_three_times_then_raises, which drives PartnerCenterClient directly through an httpx.MockTransport returning 503 every time and asserts len(attempts)==4 before PartnerCenterError(503) is raised."
   }
 ]
