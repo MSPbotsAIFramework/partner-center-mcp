@@ -79,12 +79,14 @@ def create_mcp_server(settings: Settings) -> FastMCP:
             "Microsoft CSP / Partner Center is the API partners use to manage "
             "their customers' Microsoft cloud subscriptions (Microsoft 365, "
             "Azure, Dynamics) under the Cloud Solution Provider program. "
+            "csp_list_customers lists every customer tenant under the "
+            "partner (id, company name, domain, relationship to partner); "
             "csp_list_customer_subscriptions lists every subscription a given "
             "customer tenant has (offer name, quantity, status, billing cycle, "
             "commitment end date) — call it with the customer's Entra tenant "
             "id to see what they are currently licensed for. All tools act on "
-            "a single customer tenant per call via a per-request partner "
-            "access token; there is no cross-tenant access."
+            "the calling partner's own data via a per-request partner access "
+            "token; there is no cross-partner access."
         ),
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
         stateless_http=True,
@@ -95,8 +97,9 @@ def create_mcp_server(settings: Settings) -> FastMCP:
         settings
     )
 
-    from .tools import subscriptions
+    from .tools import customers, subscriptions
 
     subscriptions.register(mcp, client_factory)
+    customers.register(mcp, client_factory)
 
     return mcp

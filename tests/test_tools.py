@@ -1,4 +1,5 @@
-"""tools/list snapshot + csp_list_customer_subscriptions behavior tests.
+"""tools/list snapshot + csp_list_customer_subscriptions/csp_list_customers
+behavior tests.
 
 No real network calls: the client seen by the tool is either a fake
 stand-in (records calls / returns or raises a fixed result) for the tool's
@@ -18,6 +19,7 @@ from partner_center_mcp.server import create_mcp_server
 
 EXPECTED_TOOLS = {
     "csp_list_customer_subscriptions": {"customer_tenant_id"},
+    "csp_list_customers": set(),
 }
 
 
@@ -252,3 +254,167 @@ async def test_api_client_retries_503_three_times_then_raises(monkeypatch):
 
     assert exc_info.value.status_code == 503
     assert len(attempts) == 4  # 1 initial attempt + 3 retries
+
+
+# --- csp_list_customers (PRD-21603) ---------------------------------------
+
+
+def _register_customers(result: dict | None = None, error: PartnerCenterError | None = None):
+    from mcp.server.fastmcp import FastMCP
+
+    from partner_center_mcp.tools import customers
+
+    mcp = FastMCP(name="test")
+    client = _FakeClient(result=result, error=error)
+    customers.register(mcp, lambda: client)
+    return mcp, client
+
+
+async def _call_customers(mcp, args: dict) -> dict:
+    result = await mcp.call_tool("csp_list_customers", args)
+    return json.loads(result[0][0].text)
+
+
+_ONE_CUSTOMER = {
+    "totalCount": 1,
+    "items": [
+        {
+            "id": "11111111-2222-3333-4444-555555555555",
+            "companyProfile": {
+                "companyName": "EMD Networking Services",
+                "domain": "emdnetworking.onmicrosoft.com",
+            },
+            "relationshipToPartner": "none",
+        }
+    ],
+}
+
+
+@pytest.mark.asyncio
+async def test_list_customers_maps_all_fields():
+    """TC1/AC1: happy path — the four surfaced fields map from the upstream
+    shape (flat id/relationshipToPartner + nested companyProfile.*) to this
+    tool's flat snake_case response shape."""
+    mcp, client = _register_customers(result=_ONE_CUSTOMER)
+    payload = await _call_customers(mcp, {})
+
+    assert payload["total_count"] == 1
+    assert payload["has_more"] is False
+    assert payload["items"] == [
+        {
+            "id": "11111111-2222-3333-4444-555555555555",
+            "company_name": "EMD Networking Services",
+            "domain": "emdnetworking.onmicrosoft.com",
+            "relationship_to_partner": "none",
+        }
+    ]
+    assert client.calls == [("/customers", {"$filter": None, "size": 50, "offset": None})]
+
+
+@pytest.mark.asyncio
+async def test_negative_limit_is_rejected_before_any_call():
+    """TC2/AC3: limit=-1 -> invalid_argument, zero upstream calls."""
+    mcp, client = _register_customers(result=_ONE_CUSTOMER)
+    payload = await _call_customers(mcp, {"limit": -1})
+
+    assert payload["error"]["code"] == "invalid_argument"
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_negative_offset_is_rejected_before_any_call():
+    """TC3/AC3: offset=-1 -> invalid_argument, zero upstream calls."""
+    mcp, client = _register_customers(result=_ONE_CUSTOMER)
+    payload = await _call_customers(mcp, {"offset": -1})
+
+    assert payload["error"]["code"] == "invalid_argument"
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_filter_argument_is_forwarded_verbatim():
+    """TC4/AC4: the filter argument reaches the upstream call as $filter,
+    unmodified — no parsing or validation on this service's side."""
+    mcp, client = _register_customers(result=_ONE_CUSTOMER)
+    filter_expr = "companyProfile/companyName eq 'X'"
+
+    await _call_customers(mcp, {"filter": filter_expr})
+
+    assert client.calls == [
+        ("/customers", {"$filter": filter_expr, "size": 50, "offset": None})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_customers_upstream_403_maps_to_unauthorized():
+    """TC5/AC5: mocked upstream 403 (no active CSP relationship / invalid
+    token) -> unauthorized, carrying the upstream message, not a raw 500."""
+    mcp, _ = _register_customers(error=PartnerCenterError(403, "No active CSP relationship"))
+    payload = await _call_customers(mcp, {})
+
+    assert payload["error"]["code"] == "unauthorized"
+    assert payload["error"]["message"] == "No active CSP relationship"
+
+
+@pytest.mark.asyncio
+async def test_zero_customers_is_a_success_with_empty_items():
+    """TC6/AC6: zero customer tenants is success, not an error."""
+    mcp, _ = _register_customers(result={"totalCount": 0, "items": []})
+    payload = await _call_customers(mcp, {})
+
+    assert "error" not in payload
+    assert payload == {"items": [], "total_count": 0, "has_more": False}
+
+
+def _customers_page(n: int, start: int = 0, total: int = 75) -> dict:
+    return {
+        "totalCount": total,
+        "items": [
+            {
+                "id": f"cust-{start + i}",
+                "companyProfile": {
+                    "companyName": f"Customer {start + i}",
+                    "domain": f"c{start + i}.onmicrosoft.com",
+                },
+                "relationshipToPartner": "none",
+            }
+            for i in range(n)
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_customers_default_limit_truncates_to_50_and_sets_has_more():
+    """TC7/AC7: 75 items / totalCount 75, no limit/offset passed -> exactly
+    50 returned (default page size), has_more true."""
+    mcp, _ = _register_customers(result=_customers_page(75))
+    payload = await _call_customers(mcp, {})
+
+    assert len(payload["items"]) == 50
+    assert payload["total_count"] == 75
+    assert payload["has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_offset_advances_page_and_has_more_accounts_for_it():
+    """TC8/AC7: offset=50 against a 75-total collection returns the
+    remaining 25 and has_more accounts for (offset + returned_count) ==
+    total, i.e. the page boundary: has_more is false exactly at the end."""
+    mcp, client = _register_customers(result=_customers_page(25, start=50, total=75))
+    payload = await _call_customers(mcp, {"offset": 50})
+
+    assert len(payload["items"]) == 25
+    assert payload["has_more"] is False  # 50 + 25 == 75, nothing left
+    assert client.calls == [("/customers", {"$filter": None, "size": 50, "offset": 50})]
+
+
+@pytest.mark.asyncio
+async def test_customers_persistent_503_maps_to_retryable_upstream_error():
+    """TC9/AC8: the upstream error that survives api_client's retries comes
+    back as a structured, retryable upstream_error — not a raised exception,
+    a raw 500, or a silently-empty success."""
+    mcp, _ = _register_customers(error=PartnerCenterError(503, "Service temporarily unavailable"))
+    payload = await _call_customers(mcp, {})
+
+    assert payload["error"]["code"] == "upstream_error"
+    assert payload["error"]["retryable"] is True
