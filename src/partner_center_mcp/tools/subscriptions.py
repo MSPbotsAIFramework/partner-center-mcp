@@ -27,6 +27,18 @@ def _map_subscription(raw: dict) -> dict:
     return {dst: raw.get(src) for src, dst in _FIELD_MAP.items()}
 
 
+def _invalid_quantity(quantity: object) -> bool:
+    """quantity must be a non-negative whole number (PRD-21574 AC4). No
+    upper bound: Partner Center's own commitment rules are authoritative."""
+    if isinstance(quantity, bool):
+        return True
+    if isinstance(quantity, int):
+        return quantity < 0
+    if isinstance(quantity, float):
+        return not quantity.is_integer() or quantity < 0
+    return True
+
+
 def register(mcp: FastMCP, client_factory: Callable[[], PartnerCenterClient | None]) -> None:
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     async def csp_list_customer_subscriptions(
@@ -74,4 +86,71 @@ def register(mcp: FastMCP, client_factory: Callable[[], PartnerCenterClient | No
 
         return dump_json_capped(
             {"items": returned, "total_count": total_count, "has_more": has_more}
+        )
+
+    # PRD-21574: read-modify-write — Partner Center's documented PATCH
+    # contract for this endpoint expects the full resource body, not a
+    # sparse patch (see docs/tickets/PRD-21574.md Tech design, Option A).
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=True, idempotentHint=True
+        )
+    )
+    async def csp_update_customer_subscription_quantity(
+        customer_tenant_id: Annotated[
+            str,
+            Field(
+                description="The customer's Entra (Azure AD) tenant id (e.g. Rewst's ORG.MAPPING.ms_tenant_id)."
+            ),
+        ],
+        subscription_id: Annotated[
+            str,
+            Field(description="Partner Center subscription id (e.g. from csp_list_customer_subscriptions's id field)."),
+        ],
+        quantity: Annotated[
+            int | float,
+            Field(description="New license quantity for the subscription. Non-negative whole number; no upper bound."),
+        ],
+    ) -> str:
+        """Change the license quantity on an existing Partner Center subscription.
+
+        Fetches the subscription, sets its quantity to the requested value,
+        and writes the full resource back (Partner Center's PATCH contract
+        for this endpoint requires the complete object, not a sparse patch).
+        Returns the updated id, quantity, and status.
+        """
+        if not customer_tenant_id or not customer_tenant_id.strip():
+            return error_envelope(
+                "invalid_argument", "customer_tenant_id is required and must not be blank", False
+            )
+        if not subscription_id or not subscription_id.strip():
+            return error_envelope(
+                "invalid_argument", "subscription_id is required and must not be blank", False
+            )
+        if _invalid_quantity(quantity):
+            return error_envelope(
+                "invalid_argument", "quantity must be a non-negative integer", False
+            )
+
+        client = client_factory()
+        if client is None:
+            return NO_TOKEN
+
+        path = f"/customers/{customer_tenant_id}/subscriptions/{subscription_id}"
+        try:
+            current = await client.get(path)
+        except PartnerCenterError as e:
+            return e.to_envelope()
+
+        updated_body = dict(current or {})
+        updated_body["quantity"] = int(quantity)
+
+        try:
+            result = await client.patch(path, updated_body)
+        except PartnerCenterError as e:
+            return e.to_envelope()
+
+        result = result or {}
+        return dump_json_capped(
+            {"id": result.get("id"), "quantity": result.get("quantity"), "status": result.get("status")}
         )

@@ -91,6 +91,9 @@ class PartnerCenterClient:
     async def get(self, path: str, params: dict | None = None) -> Any:
         return await self._request("GET", path, params=params)
 
+    async def patch(self, path: str, body: Any) -> Any:
+        return await self._request("PATCH", path, json_body=body)
+
     async def _request(
         self, method: str, path: str, params: dict | None = None, json_body: Any = None
     ) -> Any:

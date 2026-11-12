@@ -1,0 +1,71 @@
+[
+  {
+    "id": "TC1",
+    "ac": "AC1",
+    "text": "Given a mocked GET returning a subscription with quantity 10, When csp_update_customer_subscription_quantity is called with quantity 30, Then the mocked PATCH is called with the same object except quantity 30, and the tool returns {id, quantity: 30, status} from the mocked PATCH response",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_update_quantity_happy_path_gets_then_patches"]
+  },
+  {
+    "id": "TC2",
+    "ac": "AC2",
+    "text": "Given a request to /mcp with no X-PartnerCenter-Token header, When any tool is called, Then the server returns 401 listing X-PartnerCenter-Token as a required header, and no upstream call is made",
+    "type": "auto",
+    "tests": ["tests/test_middleware.py::test_missing_token_header_returns_401"]
+  },
+  {
+    "id": "TC3",
+    "ac": "AC3",
+    "text": "Given customer_tenant_id, subscription_id, or quantity is omitted or blank, When csp_update_customer_subscription_quantity is called, Then invalid_argument is returned and the mocked client recorded zero GET and zero PATCH calls",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_missing_required_argument_is_rejected_before_any_call"]
+  },
+  {
+    "id": "TC4",
+    "ac": "AC4",
+    "text": "Given quantity is negative or not an integer, When called, Then invalid_argument is returned and zero upstream calls are made",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_invalid_quantity_is_rejected_before_any_call"]
+  },
+  {
+    "id": "TC5",
+    "ac": "AC5",
+    "text": "Given the mocked GET returns 404, When called, Then not_found is returned and the mocked PATCH is never called",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_get_404_maps_to_not_found_and_skips_patch"]
+  },
+  {
+    "id": "TC6",
+    "ac": "AC6",
+    "text": "Given the mocked GET returns 403 (or GET succeeds and the mocked PATCH returns 403), When called, Then unauthorized is returned with the upstream message",
+    "type": "auto",
+    "tests": [
+      "tests/test_tools.py::test_get_403_maps_to_unauthorized",
+      "tests/test_tools.py::test_patch_403_maps_to_unauthorized_after_successful_get"
+    ]
+  },
+  {
+    "id": "TC7",
+    "ac": "AC7",
+    "text": "Given the mocked GET succeeds and the mocked PATCH returns 409, When called, Then a structured non-retryable error is returned and the response does not report success",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_patch_rejected_after_successful_get_surfaces_structured_error"]
+  },
+  {
+    "id": "TC8",
+    "ac": "AC8",
+    "text": "Given the mocked GET or the mocked PATCH returns 503 on every attempt, When called, Then upstream_error is returned with retryable true, after the configured retries are exhausted",
+    "type": "auto",
+    "tests": [
+      "tests/test_tools.py::test_persistent_get_503_maps_to_retryable_upstream_error",
+      "tests/test_tools.py::test_persistent_patch_503_maps_to_retryable_upstream_error"
+    ]
+  },
+  {
+    "id": "TC9",
+    "ac": "AC9",
+    "text": "Given two concurrent calls with different tokens, tenant ids, and subscription ids, When both run concurrently, Then each mocked GET and PATCH call carries only its own call's token, tenant id, and subscription id",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_concurrent_calls_do_not_leak_token_tenant_or_subscription"]
+  }
+]
