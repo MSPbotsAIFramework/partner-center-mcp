@@ -1,0 +1,65 @@
+[
+  {
+    "id": "TC1",
+    "ac": "AC1",
+    "text": "Given a mocked Partner Center response with 1 customer, When csp_list_customers is called with no arguments, Then items has 1 entry with id/company_name/domain/relationship_to_partner matching the mocked companyProfile fields",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_customers_maps_all_fields"]
+  },
+  {
+    "id": "TC2",
+    "ac": "AC3",
+    "text": "Given limit=-1, When csp_list_customers is called, Then invalid_argument is returned and the mocked client recorded zero calls",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_negative_limit_is_rejected_before_any_call"]
+  },
+  {
+    "id": "TC3",
+    "ac": "AC3",
+    "text": "Given offset=-1, When csp_list_customers is called, Then invalid_argument is returned and the mocked client recorded zero calls",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_negative_offset_is_rejected_before_any_call"]
+  },
+  {
+    "id": "TC4",
+    "ac": "AC4",
+    "text": "Given filter=\"companyProfile/companyName eq 'X'\", When csp_list_customers is called, Then the mocked client's recorded request includes $filter=\"companyProfile/companyName eq 'X'\" unmodified",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_filter_argument_is_forwarded_verbatim"]
+  },
+  {
+    "id": "TC5",
+    "ac": "AC5",
+    "text": "Given the mocked upstream returns 403, When called, Then unauthorized is returned with the upstream message",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_customers_upstream_403_maps_to_unauthorized"]
+  },
+  {
+    "id": "TC6",
+    "ac": "AC6",
+    "text": "Given the mocked upstream returns {totalCount:0, items:[]}, When called, Then items is [], total_count is 0, has_more is false (success, not an error)",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_zero_customers_is_a_success_with_empty_items"]
+  },
+  {
+    "id": "TC7",
+    "ac": "AC7",
+    "text": "Given the mocked upstream returns 75 items and totalCount 75 with no limit/offset passed, When called, Then exactly 50 items are returned and has_more is true",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_customers_default_limit_truncates_to_50_and_sets_has_more"]
+  },
+  {
+    "id": "TC8",
+    "ac": "AC7",
+    "text": "Given the same 75-item/totalCount-75 mocked response with offset=50, When called, Then has_more reflects (50 + returned_count) < 75",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_offset_advances_page_and_has_more_accounts_for_it"]
+  },
+  {
+    "id": "TC9",
+    "ac": "AC8",
+    "text": "Given the mocked upstream returns 503 on every attempt, When called, Then upstream_error is returned with retryable true, after the configured retries are exhausted",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_customers_persistent_503_maps_to_retryable_upstream_error"]
+  }
+]
