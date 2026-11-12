@@ -8,6 +8,7 @@ an httpx.MockTransport for the retry-exhaustion test, which exercises
 api_client's actual backoff loop.
 """
 
+import asyncio
 import json
 
 import httpx
@@ -18,8 +19,12 @@ from partner_center_mcp.config import Settings
 from partner_center_mcp.server import create_mcp_server
 
 EXPECTED_TOOLS = {
-    "csp_list_customer_subscriptions": {"customer_tenant_id"},
-    "csp_list_customers": set(),
+    "csp_list_customer_subscriptions": {"required": {"customer_tenant_id"}, "read_only": True},
+    "csp_list_customers": {"required": set(), "read_only": True},
+    "csp_update_customer_subscription_quantity": {
+        "required": {"customer_tenant_id", "subscription_id", "quantity"},
+        "read_only": False,
+    },
 }
 
 
@@ -31,11 +36,12 @@ async def test_tools_list_snapshot():
     assert names == set(EXPECTED_TOOLS), f"unexpected tool set: {names}"
 
     by_name = {t.name: t for t in tools}
-    for name, expected_required in EXPECTED_TOOLS.items():
+    for name, expected in EXPECTED_TOOLS.items():
         tool = by_name[name]
         required = set(tool.inputSchema.get("required", []))
-        assert required == expected_required, f"{name}: required={required}"
-        assert tool.annotations is not None and tool.annotations.readOnlyHint is True
+        assert required == expected["required"], f"{name}: required={required}"
+        assert tool.annotations is not None
+        assert tool.annotations.readOnlyHint is expected["read_only"], f"{name}: readOnlyHint"
         assert len(tool.description or "") <= 500, f"{name}: description too long"
         first_line = (tool.description or "").strip().splitlines()[0]
         assert len(first_line) <= 100, f"{name}: first line too long: {first_line!r}"
@@ -72,12 +78,27 @@ def test_error_envelope_mapping(status_code, expected_code, expected_retryable):
 
 class _FakeClient:
     """Minimal PartnerCenterClient stand-in: returns a fixed result, or
-    raises a fixed PartnerCenterError, and records every call made."""
+    raises a fixed PartnerCenterError, and records every call made.
 
-    def __init__(self, result: dict | None = None, error: PartnerCenterError | None = None):
+    `result`/`error` drive `get` for the list-shaped (get-only) tools.
+    `get_result`/`get_error` and `patch_result`/`patch_error` drive the two
+    calls independently for PRD-21574's read-modify-write tool."""
+
+    def __init__(
+        self,
+        result: dict | None = None,
+        error: PartnerCenterError | None = None,
+        get_result: dict | None = None,
+        get_error: PartnerCenterError | None = None,
+        patch_result: dict | None = None,
+        patch_error: PartnerCenterError | None = None,
+    ):
         self.calls: list[tuple[str, dict]] = []
-        self._result = result
-        self._error = error
+        self.patch_calls: list[tuple[str, dict]] = []
+        self._result = result if result is not None else get_result
+        self._error = error if error is not None else get_error
+        self._patch_result = patch_result
+        self._patch_error = patch_error
 
     async def get(self, path: str, params: dict | None = None):
         self.calls.append((path, params or {}))
@@ -85,20 +106,40 @@ class _FakeClient:
             raise self._error
         return self._result
 
+    async def patch(self, path: str, body: dict):
+        self.patch_calls.append((path, body))
+        if self._patch_error is not None:
+            raise self._patch_error
+        return self._patch_result
 
-def _register(result: dict | None = None, error: PartnerCenterError | None = None):
+
+def _register(
+    result: dict | None = None,
+    error: PartnerCenterError | None = None,
+    get_result: dict | None = None,
+    get_error: PartnerCenterError | None = None,
+    patch_result: dict | None = None,
+    patch_error: PartnerCenterError | None = None,
+):
     from mcp.server.fastmcp import FastMCP
 
     from partner_center_mcp.tools import subscriptions
 
     mcp = FastMCP(name="test")
-    client = _FakeClient(result=result, error=error)
+    client = _FakeClient(
+        result=result,
+        error=error,
+        get_result=get_result,
+        get_error=get_error,
+        patch_result=patch_result,
+        patch_error=patch_error,
+    )
     subscriptions.register(mcp, lambda: client)
     return mcp, client
 
 
-async def _call(mcp, args: dict) -> dict:
-    result = await mcp.call_tool("csp_list_customer_subscriptions", args)
+async def _call(mcp, args: dict, tool: str = "csp_list_customer_subscriptions") -> dict:
+    result = await mcp.call_tool(tool, args)
     return json.loads(result[0][0].text)
 
 
@@ -254,6 +295,218 @@ async def test_api_client_retries_503_three_times_then_raises(monkeypatch):
 
     assert exc_info.value.status_code == 503
     assert len(attempts) == 4  # 1 initial attempt + 3 retries
+
+
+# --- csp_update_customer_subscription_quantity (PRD-21574) ----------------
+
+_TOOL = "csp_update_customer_subscription_quantity"
+_BASE_ARGS = {"customer_tenant_id": "tenant-1", "subscription_id": "abc123", "quantity": 30}
+
+
+@pytest.mark.asyncio
+async def test_update_quantity_happy_path_gets_then_patches():
+    """TC1/AC1: GET returns the current subscription (quantity 10); PATCH is
+    called with the same object except quantity 30; the tool returns
+    {id, quantity, status} from the PATCH response."""
+    get_result = {"id": "abc123", "offerId": "offer-1", "quantity": 10, "status": "active"}
+    patch_result = {"id": "abc123", "offerId": "offer-1", "quantity": 30, "status": "active"}
+    mcp, client = _register(get_result=get_result, patch_result=patch_result)
+
+    payload = await _call(mcp, _BASE_ARGS, tool=_TOOL)
+
+    assert payload == {"id": "abc123", "quantity": 30, "status": "active"}
+    assert client.calls == [("/customers/tenant-1/subscriptions/abc123", {})]
+    assert client.patch_calls == [
+        (
+            "/customers/tenant-1/subscriptions/abc123",
+            {"id": "abc123", "offerId": "offer-1", "quantity": 30, "status": "active"},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_missing_required_argument_is_rejected_before_any_call():
+    """TC3/AC3: customer_tenant_id, subscription_id, or quantity omitted
+    entirely -> the tool call is rejected before the fake client's get/patch
+    is ever reached (fastmcp's own required-argument check, same as every
+    other tool on this server); blank string args -> this tool's own
+    invalid_argument envelope, also before any upstream call."""
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    for omit in ("customer_tenant_id", "subscription_id", "quantity"):
+        args = {k: v for k, v in _BASE_ARGS.items() if k != omit}
+        mcp, client = _register(get_result={}, patch_result={})
+        with pytest.raises(ToolError):
+            await mcp.call_tool(_TOOL, args)
+        assert client.calls == []
+        assert client.patch_calls == []
+
+    for blank_field in ("customer_tenant_id", "subscription_id"):
+        mcp, client = _register(get_result={}, patch_result={})
+        payload = await _call(mcp, {**_BASE_ARGS, blank_field: "   "}, tool=_TOOL)
+        assert payload["error"]["code"] == "invalid_argument"
+        assert client.calls == []
+        assert client.patch_calls == []
+
+
+@pytest.mark.asyncio
+async def test_invalid_quantity_is_rejected_before_any_call():
+    """TC4/AC4: quantity negative, or not a whole number -> invalid_argument,
+    zero upstream calls. quantity 0 is allowed through (Decisions: no
+    client-side lower bound above 0)."""
+    for bad_quantity in (-1, 2.5):
+        mcp, client = _register(get_result={}, patch_result={})
+        payload = await _call(mcp, {**_BASE_ARGS, "quantity": bad_quantity}, tool=_TOOL)
+        assert payload["error"]["code"] == "invalid_argument"
+        assert client.calls == []
+        assert client.patch_calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_404_maps_to_not_found_and_skips_patch():
+    """TC5/AC5: mocked GET returns 404 -> not_found, PATCH never called."""
+    mcp, client = _register(get_error=PartnerCenterError(404, "Subscription not found"))
+    payload = await _call(mcp, _BASE_ARGS, tool=_TOOL)
+
+    assert payload["error"]["code"] == "not_found"
+    assert payload["error"]["message"] == "Subscription not found"
+    assert client.patch_calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_403_maps_to_unauthorized():
+    """TC6/AC6 (GET side): mocked GET returns 403 -> unauthorized, PATCH
+    never called."""
+    mcp, client = _register(get_error=PartnerCenterError(403, "No reseller relationship"))
+    payload = await _call(mcp, _BASE_ARGS, tool=_TOOL)
+
+    assert payload["error"]["code"] == "unauthorized"
+    assert payload["error"]["message"] == "No reseller relationship"
+    assert client.patch_calls == []
+
+
+@pytest.mark.asyncio
+async def test_patch_403_maps_to_unauthorized_after_successful_get():
+    """TC6/AC6 (PATCH side): GET succeeds, mocked PATCH returns 403 ->
+    unauthorized, carrying the upstream message."""
+    mcp, client = _register(
+        get_result={"id": "abc123", "quantity": 10, "status": "active"},
+        patch_error=PartnerCenterError(403, "Token lacks write scope"),
+    )
+    payload = await _call(mcp, _BASE_ARGS, tool=_TOOL)
+
+    assert payload["error"]["code"] == "unauthorized"
+    assert payload["error"]["message"] == "Token lacks write scope"
+    assert len(client.calls) == 1
+    assert len(client.patch_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_patch_rejected_after_successful_get_surfaces_structured_error():
+    """TC7/AC7: GET succeeds, mocked PATCH returns 409 (business-rule
+    rejection) -> a structured, non-retryable error; the response never
+    reports success even though the GET itself succeeded."""
+    mcp, client = _register(
+        get_result={"id": "abc123", "quantity": 10, "status": "active"},
+        patch_error=PartnerCenterError(409, "Quantity below offer's minimum commitment"),
+    )
+    payload = await _call(mcp, _BASE_ARGS, tool=_TOOL)
+
+    assert "quantity" not in payload
+    assert "status" not in payload
+    assert payload["error"]["retryable"] is False
+    assert len(client.calls) == 1
+    assert len(client.patch_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_persistent_get_503_maps_to_retryable_upstream_error():
+    """TC8/AC8 (GET side): mocked GET returns 503 -> upstream_error,
+    retryable true; PATCH never called."""
+    mcp, client = _register(get_error=PartnerCenterError(503, "Service temporarily unavailable"))
+    payload = await _call(mcp, _BASE_ARGS, tool=_TOOL)
+
+    assert payload["error"]["code"] == "upstream_error"
+    assert payload["error"]["retryable"] is True
+    assert client.patch_calls == []
+
+
+@pytest.mark.asyncio
+async def test_persistent_patch_503_maps_to_retryable_upstream_error():
+    """TC8/AC8 (PATCH side): GET succeeds, mocked PATCH returns 503 ->
+    upstream_error, retryable true."""
+    mcp, client = _register(
+        get_result={"id": "abc123", "quantity": 10, "status": "active"},
+        patch_error=PartnerCenterError(503, "Service temporarily unavailable"),
+    )
+    payload = await _call(mcp, _BASE_ARGS, tool=_TOOL)
+
+    assert payload["error"]["code"] == "upstream_error"
+    assert payload["error"]["retryable"] is True
+
+
+@pytest.mark.asyncio
+async def test_concurrent_calls_do_not_leak_token_tenant_or_subscription(monkeypatch):
+    """TC9/AC9: two concurrent calls, each with its own token, tenant id,
+    and subscription id, must each have its own GET and PATCH reach the
+    upstream with only that call's own values — never the other's. Mirrors
+    test_middleware.py's concurrency test but exercises this tool's own
+    GET-then-PATCH sequence end to end (real PartnerCenterClient + the
+    GatewayTokenMiddleware contextvar, not the FakeClient)."""
+    from partner_center_mcp import api_client
+    from partner_center_mcp.server import _gateway_token_var
+
+    seen: list[tuple[str, str, str, str]] = []  # (method, auth, tenant, subscription_id)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.01)
+        auth = request.headers.get("authorization", "")
+        # Settings.partner_center_base_url is ".../v1", so the path is
+        # /v1/customers/{tenant}/subscriptions/{subscription_id}.
+        parts = request.url.path.split("/")
+        tenant, subscription_id = parts[3], parts[5]
+        seen.append((request.method, auth, tenant, subscription_id))
+        if request.method == "GET":
+            return httpx.Response(
+                200, json={"id": subscription_id, "quantity": 1, "status": "active"}
+            )
+        body = json.loads(request.content)
+        return httpx.Response(200, json=body)
+
+    mock_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(api_client, "_http_client", mock_client)
+
+    settings = Settings()
+    mcp = create_mcp_server(settings)
+
+    async def one_call(token: str, tenant: str, subscription_id: str, quantity: int):
+        ctx = _gateway_token_var.set(token)
+        try:
+            await mcp.call_tool(
+                _TOOL,
+                {
+                    "customer_tenant_id": tenant,
+                    "subscription_id": subscription_id,
+                    "quantity": quantity,
+                },
+            )
+        finally:
+            _gateway_token_var.reset(ctx)
+
+    await asyncio.gather(
+        one_call("token-A", "tenant-aaa", "sub-aaa", 10),
+        one_call("token-B", "tenant-bbb", "sub-bbb", 20),
+    )
+
+    assert len(seen) == 4  # 2 calls x (GET + PATCH)
+    by_auth: dict[str, set[tuple[str, str]]] = {}
+    for method, auth, tenant, subscription_id in seen:
+        by_auth.setdefault(auth, set()).add((tenant, subscription_id))
+
+    assert by_auth == {
+        "Bearer token-A": {("tenant-aaa", "sub-aaa")},
+        "Bearer token-B": {("tenant-bbb", "sub-bbb")},
+    }
 
 
 # --- csp_list_customers (PRD-21603) ---------------------------------------

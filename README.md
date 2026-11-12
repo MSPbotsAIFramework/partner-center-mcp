@@ -91,17 +91,16 @@ Links: [connect.mspbots.ai](https://connect.mspbots.ai) · [mspbots.ai](https://
 
 ## Scope
 
-Current version: **2 read-only tools**, `csp_list_customer_subscriptions`
-and `csp_list_customers`. This repo is shared by three sibling tickets that
-each add one tool for this same connector (coordinated through this repo's
-`dev-lock`):
+Current version: **3 tools** — 2 read-only, 1 write. This repo is shared by
+three sibling tickets that each add one tool for this same connector
+(coordinated through this repo's `dev-lock`):
 
 - `csp_list_customer_subscriptions` (PRD-21573) — list a customer tenant's
   subscriptions.
-- `csp_list_customers` (this ticket, PRD-21603) — list every customer
-  tenant under the partner.
-- `csp_update_customer_subscription_quantity` (PRD-21574) — not yet
-  implemented, see Known Gaps.
+- `csp_list_customers` (PRD-21603) — list every customer tenant under the
+  partner.
+- `csp_update_customer_subscription_quantity` (this ticket, PRD-21574) —
+  change the license quantity on an existing subscription.
 
 ## Authentication
 
@@ -149,6 +148,7 @@ Missing the header returns `401`:
 |---|---|---|
 | `csp_list_customer_subscriptions` | List every Partner Center subscription a CSP customer tenant has (id, offer name, quantity, status, billing cycle, unit type, commitment end date). | customer_tenant_id, limit? |
 | `csp_list_customers` | List every customer tenant under the caller's CSP partner relationship (id, company name, domain, relationship to partner). | filter?, limit?, offset? |
+| `csp_update_customer_subscription_quantity` | Change the license quantity on an existing Partner Center subscription (GET the current resource, then PATCH it back with only quantity changed). Returns id, quantity, status. | customer_tenant_id, subscription_id, quantity |
 
 ## Typical Workflows
 
@@ -162,6 +162,10 @@ Missing the header returns `401`:
   optionally with a `$filter` expression (e.g.
   `companyProfile/companyName eq 'Contoso'`) and paging through with
   `limit`/`offset` while `has_more` is true.
+- **Add or remove licenses on an existing subscription** (e.g. a purchase
+  request flow): look up the `subscription_id` via
+  `csp_list_customer_subscriptions`, then call
+  `csp_update_customer_subscription_quantity` with the new `quantity`.
 
 ## Test Example
 
@@ -204,8 +208,11 @@ failure — never a raw 500 or stack trace.
   All tests use mocked HTTP responses. True end-to-end verification against
   a live account is needed before this is relied on for a real customer
   (needs a real vendor account — does not block delivery per SOP).
-- **`csp_update_customer_subscription_quantity` (PRD-21574)** is not yet
-  implemented.
+- **`csp_update_customer_subscription_quantity`'s GET-then-PATCH sequence
+  has no optimistic-concurrency mechanism** (no ETag/If-Match documented for
+  this endpoint): a concurrent change to the same subscription between this
+  tool's GET and PATCH would be silently overwritten by this tool's PATCH.
+  Not fixed in this version — no mechanism exists to detect it.
 - **Partner Center's exact error-body shape** (`description` vs `message`
   vs `error`) is taken from the publicly documented reference, not verified
   against a live call. `api_client.py`'s `_raise_for_status` tries
